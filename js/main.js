@@ -5,7 +5,7 @@ import { InputController } from "./input.js";
 import { Waterfall } from "./waterfall.js";
 import { PracticeSession } from "./session.js";
 import { SheetView } from "./sheetview.js";
-import { parseMidi, buildSongFromMidi } from "./midi.js";
+import { parseMidi, buildSongFromMidi, summarizeChannels } from "./midi.js";
 import { DEMO_SONGS } from "../data/songs.js";
 import {
   PHYS_KEYS, KEY_DEG, NAME12, DEG,
@@ -75,7 +75,7 @@ const els = {
   baseSel: $("baseSel"), volumeRange: $("volumeRange"), muteBtn: $("muteBtn"),
   themeBtn: $("themeBtn"), panicBtn: $("panicBtn"),
   songSel: $("songSel"), importMidiBtn: $("importMidiBtn"), midiFile: $("midiFile"),
-  trackWrap: $("trackWrap"), trackSel: $("trackSel"),
+  channelWrap: $("channelWrap"), channelSel: $("channelSel"),
   speedSel: $("speedSel"), playBtn: $("playBtn"), resetBtn: $("resetBtn"),
   hud: $("hud"), hudProgressBar: $("hudProgressBar"), hudProgress: $("hudProgress"),
   hudCombo: $("hudCombo"), hudAcc: $("hudAcc"), hudScore: $("hudScore"),
@@ -222,7 +222,7 @@ function loadSong(idx){
   const entry = state.rawSongs[idx];
   state.song = entry.build(state.baseOct);
   els.songSel.value = idx;
-  rebuildTrackSel(entry);
+  rebuildChannelSel(entry);
   resetSession();
 }
 
@@ -353,8 +353,8 @@ async function importMidiFile(file){
     const entry = {
       id: "midi-" + Date.now(),
       title: file.name.replace(/\.(mid|midi)$/i, "") || "MIDI 曲目",
-      parsed, trackSel: undefined,
-      build(baseOct){ return buildSongFromMidi(this.parsed, this.trackSel, baseOct, this.title); },
+      parsed, channelSel: undefined,
+      build(baseOct){ return buildSongFromMidi(this.parsed, this.channelSel, baseOct, this.title); },
     };
     state.rawSongs.push(entry);
     rebuildSongSel();
@@ -365,31 +365,31 @@ async function importMidiFile(file){
   }
 }
 
-function rebuildTrackSel(entry){
-  const sel = els.trackSel;
+function rebuildChannelSel(entry){
+  const sel = els.channelSel;
   sel.innerHTML = "";
   if (entry.parsed){
     const auto = document.createElement("option");
     auto.value = "auto"; auto.textContent = "自动选择";
     sel.appendChild(auto);
-    entry.parsed.tracks.forEach((t, i) => {
+    for (const c of summarizeChannels(entry.parsed)){
       const op = document.createElement("option");
-      op.value = i;
-      op.textContent = `${t.index + 1}. ${t.name || "音轨"}（${t.noteCount} 音）`;
+      op.value = c.channel;
+      op.textContent = `通道 ${c.channel}（${c.noteCount} 音）`;
       sel.appendChild(op);
-    });
+    }
     const merge = document.createElement("option");
-    merge.value = "merge"; merge.textContent = "合并全部音轨";
+    merge.value = "merge"; merge.textContent = "合并全部通道";
     sel.appendChild(merge);
-    sel.value = entry.trackSel === undefined ? "auto" : String(entry.trackSel);
+    sel.value = entry.channelSel === undefined ? "auto" : String(entry.channelSel);
   } else {
-    // 内置曲目：单音轨
+    // 内置曲目：单通道
     const op = document.createElement("option");
-    op.value = "0";
-    op.textContent = "音轨 1";
+    op.value = "1";
+    op.textContent = "通道 1";
     op.disabled = true;
     sel.appendChild(op);
-    sel.value = "0";
+    sel.value = "1";
   }
 }
 
@@ -560,11 +560,11 @@ els.midiFile.addEventListener("change", e => {
   e.target.value = "";
 });
 
-els.trackSel.addEventListener("change", e => {
+els.channelSel.addEventListener("change", e => {
   const entry = state.rawSongs[state.currentIdx];
   if (!entry || !entry.parsed) return;
   const v = e.target.value;
-  entry.trackSel = v === "auto" ? undefined : (v === "merge" ? "merge" : +v);
+  entry.channelSel = v === "auto" ? undefined : (v === "merge" ? "merge" : +v);
   loadSong(state.currentIdx);
 });
 

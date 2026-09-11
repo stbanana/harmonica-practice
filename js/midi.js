@@ -124,7 +124,6 @@ export function parseMidi(data){
   const tempoEvents = [{ tick: 0, usPerQ: 500000 }]; // 缺省 120bpm
   const tracks = [];
   let durationTick = 0;
-  let trackIndex = 0; // 原始音轨序号（含空轨），用于 UI 展示
 
   while (r.pos < r.v.byteLength - 8){
     const id = r.str(4);
@@ -134,10 +133,9 @@ export function parseMidi(data){
       const trackEnd = r.pos + len;
       const t = parseTrack(r, trackEnd, tempoEvents);
       if (t.notes.length){
-        tracks.push({ index: trackIndex, name: t.name, noteCount: t.notes.length, notes: t.notes });
+        tracks.push({ name: t.name, noteCount: t.notes.length, notes: t.notes });
         for (const n of t.notes) durationTick = Math.max(durationTick, n.startTick + n.durTick);
       }
-      trackIndex++;
     } else {
       r.skip(len); // 未知 chunk 跳过
     }
@@ -163,14 +161,58 @@ export function makeTickToSec(tempoEvents, tpq){
   };
 }
 
-// 默认音轨：非鼓轨（通道 10）中音符最多的一轨
-export function bestTrackIndex(parsed){
-  let best = -1, bestCount = 0;
-  parsed.tracks.forEach((t, i) => {
-    const count = t.notes.filter(n => n.ch !== 9).length;
-    if (count > bestCount){ best = i; bestCount = count; }
-  });
-  return best < 0 && parsed.tracks.length ? 0 : best;
+// 通道汇总：含音符的通道（1-16），按通道号排序
+export function summarizeChannels(parsed){
+  const map = new Map(); // ch(0-15) → 音符数
+  for (const t of parsed.tracks){
+    for (const n of t.notes){
+      map.set(n.ch, (map.get(n.ch) || 0) + 1);
+    }
+  }
+  return [...map.entries()]
+    .map(([ch, noteCount]) => ({ channel: ch + 1, noteCount }))
+    .sort((a, b) => a.channel - b.channel);
+}
+
+// 默认通道：非打击乐通道（GM 通道 10）中音符最多的通道；没有则取音符最多的任一通道
+export function bestChannel(parsed){
+  const channels = summarizeChannels(parsed);
+  let best = null, bestCount = -1;
+  for (const c of channels){
+    if (c.channel === 10) continue;
+    if (c.noteCount > bestCount){ best = c.channel; bestCount = c.noteCount; }
+  }
+  if (best === null) best = channels.length ? channels[0].channel : null;
+  return best;
+}
+
+// channelSel: 通道号 1-16 | "merge" | undefined（自动选择）
+export function buildSongFromMidi(parsed, channelSel, baseOct, title){
+  let events;
+  if (channelSel === "merge"){
+    events = parsed.tracks.flatMap(t => t.notes).filter(n => n.ch !== 9);
+  } else {
+    const ch = channelSel === undefined || channelSel === null ? bestChannel(parsed) : channelSel;
+    const ch0 = ch - 1; // 转 0 基
+    events = parsed.tracks.flatMap(t => t.notes).filter(n => n.ch === ch0);
+  }
+  if (!events.length) throw new Error("该通道没有音符");
+
+  const notes = reduceToMelody(events, parsed.tickToSec);
+  // 把选中通道的起始时间平移到 0：即便第一个音符在 20s 处，
+  // 也强制 3-2-1 倒数后直接从第一个音符开始。
+  if (notes.length){
+    const minStart = Math.min(...notes.map(n => n.startSec));
+    for (const n of notes) n.startSec -= minStart;
+  }
+
+  const raw = {
+    title: title || "MIDI 曲目",
+    source: "midi",
+    bpm: parsed.bpm,
+    notes,
+  };
+  return finalizeSong(raw, baseOct);
 }
 
 // 和弦 → 单音：起始相差 ≤30ms 的音符归为一组，取最高音（旋律几乎总在最上声部）
@@ -198,33 +240,4 @@ function reduceToMelody(events, tickToSec){
       durBeats: g.top.durTick / 480,
     };
   });
-}
-
-// trackSel: 索引 | "merge" | undefined（自动选择）
-export function buildSongFromMidi(parsed, trackSel, baseOct, title){
-  let events;
-  if (trackSel === "merge"){
-    events = parsed.tracks.flatMap(t => t.notes).filter(n => n.ch !== 9);
-  } else {
-    const idx = trackSel === undefined || trackSel === null ? bestTrackIndex(parsed) : trackSel;
-    if (idx < 0 || idx >= parsed.tracks.length) throw new Error("没有可用的音轨");
-    events = parsed.tracks[idx].notes;
-  }
-  if (!events.length) throw new Error("该 MIDI 文件（音轨）没有音符");
-
-  const notes = reduceToMelody(events, parsed.tickToSec);
-  // 把选中音轨的起始时间平移到 0：即便第一个音符在 20s 处，
-  // 也强制 3-2-1 倒数后直接从第一个音符开始。
-  if (notes.length){
-    const minStart = Math.min(...notes.map(n => n.startSec));
-    for (const n of notes) n.startSec -= minStart;
-  }
-
-  const raw = {
-    title: title || "MIDI 曲目",
-    source: "midi",
-    bpm: parsed.bpm,
-    notes,
-  };
-  return finalizeSong(raw, baseOct);
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseMidi, buildSongFromMidi, bestTrackIndex } from "../js/midi.js";
+import { parseMidi, buildSongFromMidi, bestChannel, summarizeChannels } from "../js/midi.js";
 
 // ---------- SMF 字节构造工具 ----------
 
@@ -80,7 +80,7 @@ test("tempo 变化的分段换算", () => {
   const p = parseMidi(buf);
   assert.equal(p.tickToSec(480), 0.5);
   assert.equal(p.tickToSec(960), 1.5);  // 0.5 + 1.0
-  const song = buildSongFromMidi(p, 0, 5, "t");
+  const song = buildSongFromMidi(p, 1, 5, "t");
   const n62 = song.notes.find(n => n.pitch === 62);
   assert.equal(n62.startSec, 0.5);
   assert.equal(n62.durSec, 1.0);
@@ -101,7 +101,7 @@ test("非 MIDI 文件报错", () => {
   assert.throws(() => parseMidi(Buffer.from("hello world!!")), /MThd/);
 });
 
-test("format 1：tempo 轨（无音符）不影响选轨", () => {
+test("format 1：tempo 轨（无音符）不影响通道选择", () => {
   const buf = smf({
     format: 1,
     tracks: [
@@ -111,7 +111,7 @@ test("format 1：tempo 轨（无音符）不影响选轨", () => {
   });
   const p = parseMidi(buf);
   assert.equal(p.tracks.length, 1);      // 无音符轨不进列表
-  assert.equal(bestTrackIndex(p), 0);
+  assert.equal(bestChannel(p), 1);
   assert.equal(p.bpm, 120);
   const song = buildSongFromMidi(p, undefined, 5, "t");
   assert.equal(song.notes.length, 1);
@@ -130,7 +130,7 @@ test("和弦取最高音（起始 ≤30ms 归并）", () => {
   });
   const p = parseMidi(buf);
   assert.equal(p.tracks[0].notes.length, 3);   // 解析层保留全部
-  const song = buildSongFromMidi(p, 0, 5, "t");
+  const song = buildSongFromMidi(p, 1, 5, "t");
   assert.equal(song.notes.length, 1);          // 归并成单音
   assert.equal(song.notes[0].pitch, 67);       // 最高音
 });
@@ -138,12 +138,12 @@ test("和弦取最高音（起始 ≤30ms 归并）", () => {
 test("音域适配：整体移位到可演奏域", () => {
   const buf = smf({ tracks: [ev(d(0), on(108), d(480), off(108), d(0), metaEOT())] });
   const p = parseMidi(buf);
-  const song = buildSongFromMidi(p, 0, 5, "t");
+  const song = buildSongFromMidi(p, 1, 5, "t");
   assert.equal(song.notes[0].pitch, 96);       // C8 → 高高do
   assert.deepEqual(song.notes[0].combo, { key: ",", shift: 1, sharp: false });
 });
 
-test("merge 合并多轨（不含鼓轨）", () => {
+test("merge 合并多通道（不含鼓通道）", () => {
   const drum = ev(d(0), Buffer.from([0x99, 38, 64]), d(240), Buffer.from([0x89, 38, 0]), d(0), metaEOT()); // 通道 10
   const mel = ev(d(0), on(72), d(240), off(72), d(0), metaEOT());
   const buf = smf({ format: 1, tracks: [drum, mel] });
@@ -151,25 +151,30 @@ test("merge 合并多轨（不含鼓轨）", () => {
   assert.equal(p.tracks.length, 2);
   const song = buildSongFromMidi(p, "merge", 5, "t");
   assert.equal(song.notes.length, 1);
-  assert.equal(song.notes[0].pitch, 72);       // 鼓轨被过滤
+  assert.equal(song.notes[0].pitch, 72);       // 鼓通道被过滤
 });
 
-test("保留原始音轨序号（空轨不入列表但序号不重排）", () => {
+test("按通道汇总并正确选默认通道（排除鼓通道 10）", () => {
   const buf = smf({
     format: 1,
     tracks: [
-      ev(d(0), metaEOT()),                                       // 音轨 1（空）
-      ev(d(0), on(72), d(480), off(72), d(0), metaEOT()),        // 音轨 2
-      ev(d(0), metaEOT()),                                       // 音轨 3（空）
+      ev(d(0), on(72), d(480), off(72), d(0), metaEOT()),                       // 通道 1，1 音
+      ev(d(0), Buffer.from([0x91, 60, 64]), d(480), Buffer.from([0x81, 60, 0]), d(0), metaEOT()), // 通道 2，1 音
+      ev(d(0), Buffer.from([0x99, 38, 64]), d(120), Buffer.from([0x89, 38, 0]),
+         d(120), Buffer.from([0x99, 42, 64]), d(120), Buffer.from([0x89, 42, 0]), d(0), metaEOT()), // 通道 10 鼓，2 音
     ],
   });
   const p = parseMidi(buf);
-  assert.equal(p.tracks.length, 1);
-  assert.equal(p.tracks[0].index, 1);          // 原始序号是 1（第 2 轨）
-  assert.equal(bestTrackIndex(p), 0);
+  const chs = summarizeChannels(p);
+  assert.deepEqual(chs.map(c => c.channel), [1, 2, 10]);
+  assert.deepEqual(chs.map(c => c.noteCount), [1, 1, 2]);
+  assert.equal(bestChannel(p), 1);          // 通道 10 被排除，1 与 2 同分 → 取序号小的 1
+  const song = buildSongFromMidi(p, 2, 5, "t"); // 显式选通道 2
+  assert.equal(song.notes.length, 1);
+  assert.equal(song.notes[0].pitch, 60);
 });
 
-test("选中音轨起始时间平移到 0（第一个音符非 0 秒也强制从头倒数）", () => {
+test("选中通道起始时间平移到 0（第一个音符非 0 秒也强制从头倒数）", () => {
   const buf = smf({
     tracks: [ev(
       d(960), on(60), d(960), off(60),         // 第一个音符 960 tick = 1s 处
@@ -178,7 +183,7 @@ test("选中音轨起始时间平移到 0（第一个音符非 0 秒也强制从
     )],
   });
   const p = parseMidi(buf);
-  const song = buildSongFromMidi(p, 0, 5, "t");
+  const song = buildSongFromMidi(p, 1, 5, "t");
   assert.equal(song.notes[0].startSec, 0);     // 平移到 0
   assert.equal(song.notes[1].startSec, 1.5);   // 相对间隔不变（2.5 - 1.0）
   assert.equal(song.notes[0].pitch, 60);
