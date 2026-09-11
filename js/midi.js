@@ -124,6 +124,7 @@ export function parseMidi(data){
   const tempoEvents = [{ tick: 0, usPerQ: 500000 }]; // 缺省 120bpm
   const tracks = [];
   let durationTick = 0;
+  let trackIndex = 0; // 原始音轨序号（含空轨），用于 UI 展示
 
   while (r.pos < r.v.byteLength - 8){
     const id = r.str(4);
@@ -133,9 +134,10 @@ export function parseMidi(data){
       const trackEnd = r.pos + len;
       const t = parseTrack(r, trackEnd, tempoEvents);
       if (t.notes.length){
-        tracks.push({ name: t.name, noteCount: t.notes.length, notes: t.notes });
+        tracks.push({ index: trackIndex, name: t.name, noteCount: t.notes.length, notes: t.notes });
         for (const n of t.notes) durationTick = Math.max(durationTick, n.startTick + n.durTick);
       }
+      trackIndex++;
     } else {
       r.skip(len); // 未知 chunk 跳过
     }
@@ -210,11 +212,19 @@ export function buildSongFromMidi(parsed, trackSel, baseOct, title){
   }
   if (!events.length) throw new Error("该 MIDI 文件（音轨）没有音符");
 
+  const notes = reduceToMelody(events, parsed.tickToSec);
+  // 把选中音轨的起始时间平移到 0：即便第一个音符在 20s 处，
+  // 也强制 3-2-1 倒数后直接从第一个音符开始。
+  if (notes.length){
+    const minStart = Math.min(...notes.map(n => n.startSec));
+    for (const n of notes) n.startSec -= minStart;
+  }
+
   const raw = {
     title: title || "MIDI 曲目",
     source: "midi",
     bpm: parsed.bpm,
-    notes: reduceToMelody(events, parsed.tickToSec),
+    notes,
   };
   return finalizeSong(raw, baseOct);
 }

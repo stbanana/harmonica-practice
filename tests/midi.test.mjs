@@ -153,3 +153,33 @@ test("merge 合并多轨（不含鼓轨）", () => {
   assert.equal(song.notes.length, 1);
   assert.equal(song.notes[0].pitch, 72);       // 鼓轨被过滤
 });
+
+test("保留原始音轨序号（空轨不入列表但序号不重排）", () => {
+  const buf = smf({
+    format: 1,
+    tracks: [
+      ev(d(0), metaEOT()),                                       // 音轨 1（空）
+      ev(d(0), on(72), d(480), off(72), d(0), metaEOT()),        // 音轨 2
+      ev(d(0), metaEOT()),                                       // 音轨 3（空）
+    ],
+  });
+  const p = parseMidi(buf);
+  assert.equal(p.tracks.length, 1);
+  assert.equal(p.tracks[0].index, 1);          // 原始序号是 1（第 2 轨）
+  assert.equal(bestTrackIndex(p), 0);
+});
+
+test("选中音轨起始时间平移到 0（第一个音符非 0 秒也强制从头倒数）", () => {
+  const buf = smf({
+    tracks: [ev(
+      d(960), on(60), d(960), off(60),         // 第一个音符 960 tick = 1s 处
+      d(480), on(64), d(480), off(64),         // 第二个在 2400 tick = 2.5s 处
+      d(0), metaEOT(),
+    )],
+  });
+  const p = parseMidi(buf);
+  const song = buildSongFromMidi(p, 0, 5, "t");
+  assert.equal(song.notes[0].startSec, 0);     // 平移到 0
+  assert.equal(song.notes[1].startSec, 1.5);   // 相对间隔不变（2.5 - 1.0）
+  assert.equal(song.notes[0].pitch, 60);
+});

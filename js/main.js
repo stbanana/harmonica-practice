@@ -222,8 +222,7 @@ function loadSong(idx){
   const entry = state.rawSongs[idx];
   state.song = entry.build(state.baseOct);
   els.songSel.value = idx;
-  els.trackWrap.hidden = !entry.parsed;
-  if (entry.parsed) rebuildTrackSel(entry);
+  rebuildTrackSel(entry);
   resetSession();
 }
 
@@ -369,19 +368,29 @@ async function importMidiFile(file){
 function rebuildTrackSel(entry){
   const sel = els.trackSel;
   sel.innerHTML = "";
-  const auto = document.createElement("option");
-  auto.value = "auto"; auto.textContent = "自动选择";
-  sel.appendChild(auto);
-  entry.parsed.tracks.forEach((t, i) => {
+  if (entry.parsed){
+    const auto = document.createElement("option");
+    auto.value = "auto"; auto.textContent = "自动选择";
+    sel.appendChild(auto);
+    entry.parsed.tracks.forEach((t, i) => {
+      const op = document.createElement("option");
+      op.value = i;
+      op.textContent = `${t.index + 1}. ${t.name || "音轨"}（${t.noteCount} 音）`;
+      sel.appendChild(op);
+    });
+    const merge = document.createElement("option");
+    merge.value = "merge"; merge.textContent = "合并全部音轨";
+    sel.appendChild(merge);
+    sel.value = entry.trackSel === undefined ? "auto" : String(entry.trackSel);
+  } else {
+    // 内置曲目：单音轨
     const op = document.createElement("option");
-    op.value = i;
-    op.textContent = `${i + 1}. ${t.name || "音轨"}（${t.noteCount} 音）`;
+    op.value = "0";
+    op.textContent = "音轨 1";
+    op.disabled = true;
     sel.appendChild(op);
-  });
-  const merge = document.createElement("option");
-  merge.value = "merge"; merge.textContent = "合并全部音轨";
-  sel.appendChild(merge);
-  sel.value = entry.trackSel === undefined ? "auto" : String(entry.trackSel);
+    sel.value = "0";
+  }
 }
 
 // ---------- 简谱模式 ----------
