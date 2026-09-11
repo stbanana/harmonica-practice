@@ -1,0 +1,5 @@
+# Git Bash / msys 崩溃转储
+*.stackdump
+
+# 本地参考文件（不入库）
+口琴钢琴测试台.html

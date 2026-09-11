@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>口琴练习器（三角洲键位）</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-mode="free">
+
+<header class="app-header">
+  <h1 class="logo">口琴练习器</h1>
+  <nav class="tabs" data-ui id="modeTabs">
+    <button data-tab="free" class="tab active">自由练习</button>
+    <button data-tab="waterfall" class="tab">瀑布流引导</button>
+    <button data-tab="sheet" class="tab">简谱看谱</button>
+  </nav>
+  <div class="header-settings" data-ui>
+    <label class="ctl" title="中音 do 的基准八度">中音 do
+      <select id="baseSel"></select>
+    </label>
+    <label class="ctl" title="音量">音量
+      <input type="range" id="volumeRange" min="0" max="100" value="80">
+    </label>
+    <button id="muteBtn" class="btn ghost" title="静音（不静音时钟）">静音</button>
+    <button id="themeBtn" class="btn ghost" title="主题：自动（跟随系统）/ 深色 / 浅色">主题：自动</button>
+    <button id="panicBtn" class="btn danger" title="全部松开（紧急停止）">紧急停止</button>
+  </div>
+</header>
+
+<div class="songbar" data-ui>
+  <!-- 瀑布流模式的控制条 -->
+  <div class="controls controls-waterfall">
+    <label class="ctl">曲目
+      <select id="songSel"></select>
+    </label>
+    <button id="importMidiBtn" class="btn">导入 MIDI…</button>
+    <input type="file" id="midiFile" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
+    <label class="ctl" id="trackWrap" hidden>音轨
+      <select id="trackSel"></select>
+    </label>
+    <div class="seg" id="practiceSeg">
+      <button data-sub="follow" class="active">跟练</button>
+      <button data-sub="rhythm">节奏</button>
+    </div>
+    <label class="ctl">速度
+      <select id="speedSel">
+        <option value="0.5">0.5×</option>
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+      </select>
+    </label>
+    <button id="playBtn" class="btn primary">▶ 开始</button>
+    <button id="resetBtn" class="btn ghost" title="重置">↺</button>
+  </div>
+
+  <!-- 简谱模式的控制条 -->
+  <div class="controls controls-sheet">
+    <button id="importSheetBtn" class="btn">导入简谱图片…</button>
+    <input type="file" id="sheetFile" accept="image/png,image/jpeg,image/webp" hidden>
+    <button id="clearSheetBtn" class="btn ghost">清除图片</button>
+    <span class="hint">支持把图片拖到下方区域，或 Ctrl+V 粘贴截图</span>
+  </div>
+
+  <!-- 自由模式的提示 -->
+  <div class="controls controls-free">
+    <span class="hint">直接按键吹奏即可 · z~m = do~si · 逗号 = 高do · 按住左/右键变八度 · 中键升半音</span>
+  </div>
+
+  <!-- 瀑布流 HUD -->
+  <div class="hud" id="hud" hidden>
+    <div class="hud-progress"><i id="hudProgressBar"></i></div>
+    <span class="chip">进度 <b id="hudProgress">0%</b></span>
+    <span class="chip">连击 <b id="hudCombo">0</b></span>
+    <span class="chip">准确率 <b id="hudAcc">—</b></span>
+    <span class="chip">评分 <b id="hudScore">0</b></span>
+  </div>
+</div>
+
+<main class="stage">
+  <!-- 自由练习 -->
+  <section class="panel panel-free" id="freeStage">
+    <div class="hero">
+      <span class="big" id="nowNameBig">—</span>
+      <span class="combo" id="nowComboBig">等待按键…</span>
+    </div>
+    <div class="card">
+      <div class="note-legend">音高范围（每行一个八度：低音do ~ 高高音#do）：</div>
+      <div class="piano" id="pianoStrip"></div>
+    </div>
+    <div class="card rules">
+      <div class="note-legend">键位规则（与《三角洲行动》游戏内口琴一致）：</div>
+      <p class="sub">z x c v b n m = do re mi fa sol la si（中音）；逗号 = 高音do；按住左键 = 整排降到低八度；
+        按住右键 = 整排升到高八度；右键+逗号 = 高高音do；再按中键 = 高高音#do；每个白键 + 中键 = 升半音。</p>
+    </div>
+  </section>
+
+  <!-- 瀑布流引导 -->
+  <section class="panel panel-waterfall" id="wfStage">
+    <canvas id="wfCanvas"></canvas>
+    <div class="overlay hidden" id="endOverlay">
+      <div class="overlay-card" data-ui>
+        <h2 id="endTitle">完成！</h2>
+        <dl class="end-stats" id="endStats"></dl>
+        <div class="overlay-actions">
+          <button class="btn primary" id="endRestartBtn">重练</button>
+          <button class="btn ghost" id="endCloseBtn">关闭</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 简谱看谱 -->
+  <section class="panel panel-sheet" id="sheetStage">
+    <div class="sheet-tools" data-ui>
+      <button class="btn ghost small" id="zoomOutBtn">−</button>
+      <button class="btn ghost small" id="zoomInBtn">＋</button>
+      <button class="btn ghost small" id="fitBtn">适配宽度</button>
+      <button class="btn ghost small" id="resetViewBtn">重置</button>
+    </div>
+    <div class="sheet-viewer" id="sheetViewer">
+      <div class="sheet-empty" id="sheetEmpty">
+        <p>把简谱图片拖到这里</p>
+        <p class="sub">或点上方「导入简谱图片…」/ Ctrl+V 粘贴截图</p>
+      </div>
+      <img id="sheetImg" alt="简谱" draggable="false">
+    </div>
+  </section>
+</main>
+
+<footer class="bottombar" data-ui>
+  <div class="bottom-row">
+    <div class="nowplaying">
+      <span class="big" id="nowName">—</span>
+      <span class="combo" id="nowCombo">等待按键…</span>
+    </div>
+    <div class="lamps">
+      <button class="lamp" id="lampLeft" title="点击锁定/解锁 低八度（触屏用）"><i class="dot"></i>左键 低八度</button>
+      <button class="lamp" id="lampRight" title="点击锁定/解锁 高八度（触屏用）"><i class="dot"></i>右键 高八度</button>
+      <button class="lamp" id="lampMid" title="点击锁定/解锁 升半音（触屏用）"><i class="dot"></i>中键 升半音</button>
+    </div>
+  </div>
+  <div class="keys" id="virtualKeys"></div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
