@@ -8,7 +8,7 @@ import { SheetView } from "./sheetview.js";
 import { parseMidi, buildSongFromMidi } from "./midi.js";
 import { DEMO_SONGS } from "../data/songs.js";
 import {
-  PHYS_KEYS, KEY_DEG, NAME12,
+  PHYS_KEYS, KEY_DEG, NAME12, DEG,
   pitchName, degName, regOf, buildSong,
 } from "./music.js";
 
@@ -473,7 +473,7 @@ function buildVirtualKeys(){
   PHYS_KEYS.forEach(k => {
     const d = document.createElement("div");
     d.className = "gkey";
-    const nm = k === "," ? "高do" : ["do","re","mi","fa","sol","la","si"][KEY_DEG[k] / 2];
+    const nm = k === "," ? "高do" : DEG[KEY_DEG[k]];
     const kbd = k === "," ? "，" : k.toUpperCase();
     d.innerHTML = `<kbd>${kbd}</kbd><span class="nm">${nm}</span>`;
     // preventDefault 会抑制兼容鼠标事件，鼠标点虚拟键不会触发修饰键（与原版一致）
