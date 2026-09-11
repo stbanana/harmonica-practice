@@ -16,17 +16,34 @@ export class PracticeSession {
     this.rt = this.song.notes.map(n => ({ ...n, judged: false, result: null, judgedAt: null, deltaMs: null }));
     this.stats = { perfect: 0, good: 0, miss: 0, wrong: 0, extra: 0, combo: 0, maxCombo: 0 };
     this.finished = false;
+    this.followNow = 0;
+    this._lastWall = null;
   }
 
   nextNote(){
     return this.rt.find(n => !n.judged && !n.outOfRange) || null;
   }
 
-  // 跟练模式的滚动钳制：时钟最多推进到下一待按音符的开始时刻
-  clampClock(now){
-    if (this.mode !== "follow") return now;
+  // 跟练模式的独立时间轴：宿主每帧用墙钟时间推进。
+  // 只按真实流逝时间前进（可乘速度），且永不超过下一待按音符的开始时刻——
+  // 因此等待期间时间轴冻结，命中后从停靠点按音符时序继续，不会跳拍。
+  startFollow(atSec){
+    this.followNow = atSec;
+    this._lastWall = null;
+  }
+
+  // 暂停/恢复后调用：让下一次 advance 以当前墙钟为基准重新计时
+  syncFollowWall(){
+    this._lastWall = null;
+  }
+
+  advanceFollow(wallNow, speed = 1){
+    if (this._lastWall === null){ this._lastWall = wallNow; return; }
+    const dt = Math.max(wallNow - this._lastWall, 0);
+    this._lastWall = wallNow;
     const n = this.nextNote();
-    return n ? Math.min(now, n.startSec) : now;
+    const target = n ? n.startSec : Infinity;
+    this.followNow = Math.min(this.followNow + dt * speed, target);
   }
 
   // 宿主在每次按下（新 onset）时调用；now 为歌曲时间（秒）

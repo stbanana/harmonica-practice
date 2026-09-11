@@ -22,7 +22,7 @@ const settings = (() => {
 
 const state = {
   mode: ["free", "waterfall", "sheet"].includes(settings.lastMode) ? settings.lastMode : "free",
-  sub: "follow",
+  sub: "rhythm",
   baseOct: settings.baseOct ?? 5,
   speed: settings.speed ?? 1,
   themeMode: ["auto", "dark", "light"].includes(settings.theme) ? settings.theme : "auto",
@@ -162,9 +162,8 @@ function refreshNowDisplay(s){
 }
 
 function judgePress(e){
-  const now = clock.songNow();
-  const judgeNow = state.sub === "follow" ? state.session.clampClock(now) : now;
-  const r = state.session.press(e.pitch, judgeNow);
+  const now = state.sub === "follow" ? state.session.followNow : clock.songNow();
+  const r = state.session.press(e.pitch, now);
   if (r.result === "hit" || r.result === "perfect" || r.result === "good"){
     const color = r.result === "perfect" ? "#f5b041" : "#3fa573";
     waterfall.ring(r.note.col, color);
@@ -233,6 +232,7 @@ function resetSession(){
   clock.leadIn = state.sub === "rhythm" ? 3 : 2;
   clock.pausedAt = -clock.leadIn;
   state.session = state.song ? new PracticeSession(state.song, state.sub) : null;
+  if (state.session) state.session.startFollow(-clock.leadIn);
   state.started = false;
   state.overlayShown = false;
   hideOverlay();
@@ -242,6 +242,7 @@ function resetSession(){
 
 function restartSession(){
   state.session.reset();
+  state.session.startFollow(-clock.leadIn);
   state.overlayShown = false;
   hideOverlay();
   state.started = true;
@@ -264,6 +265,7 @@ function togglePlay(){
   } else {
     audio.ensure();
     clock.resume();
+    state.session.syncFollowWall(); // 跟练时间轴以恢复时刻为新基准，避免大步跳进
   }
   updatePlayBtn();
 }
@@ -414,13 +416,15 @@ function frame(){
   requestAnimationFrame(frame);
   const animT = performance.now() / 1000;
   if (state.mode === "waterfall" && state.session){
-    const now = clock.songNow();
-    const renderNow = state.session.clampClock(now);
+    if (clock.playing && state.sub === "follow"){
+      state.session.advanceFollow(animT, clock.speed);
+    }
+    const renderNow = state.sub === "follow" ? state.session.followNow : clock.songNow();
     if (clock.playing) state.session.tick(renderNow);
     waterfall.render(renderNow, state.session, { animT, playing: clock.playing, started: state.started });
     updateHUD();
     updateTargetHighlight();
-    checkFinish(now);
+    checkFinish(renderNow);
   }
 }
 requestAnimationFrame(frame);

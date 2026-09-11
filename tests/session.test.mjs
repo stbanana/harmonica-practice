@@ -12,38 +12,61 @@ const mkSong = (rawNotes, baseOct = 5) => buildSong({
 
 test("跟练：按对才前进，提前按也算", () => {
   const s = new PracticeSession(mkSong([[72, 0, 1], [74, 1, 1], [76, 2, 1]]), "follow");
-  // 时钟钳制在下一音符
-  assert.equal(s.clampClock(100), 0);
-  assert.equal(s.press(74, -5).result, "wrong"); // 音不对，不前进
-  assert.equal(s.press(72, -5).result, "hit");   // 提前按也算（等待式）
-  assert.equal(s.clampClock(100), 1);
-  const r = s.press(74, 0.5);
+  s.startFollow(0);
+  s.advanceFollow(100);                // 真实时间大步前进，时间轴停在第一音符
+  assert.equal(s.followNow, 0);
+  assert.equal(s.press(74, s.followNow).result, "wrong"); // 音不对，不前进
+  assert.equal(s.press(72, s.followNow).result, "hit");   // 提前按也算（等待式）
+  s.advanceFollow(101);                // 命中后走了 1 秒 → 停在下一音符（startSec=1）
+  s.tick(s.followNow);
+  assert.equal(s.followNow, 1);
+  const r = s.press(74, s.followNow);
   assert.equal(r.result, "hit");
   assert.equal(r.note.pitch, 74);
   assert.equal(s.stats.wrong, 1);
   assert.equal(s.stats.combo, 2);
-  s.press(76, 2);
+  s.advanceFollow(102);
+  s.press(76, s.followNow);
   assert.equal(s.finished, true);
   assert.equal(s.stats.maxCombo, 3);
+});
+
+test("跟练：等待期间时间轴冻结，命中后从停靠点续走（回归：等待越久不应跳拍）", () => {
+  const s = new PracticeSession(mkSong([[72, 0, 1], [74, 1, 1], [76, 2, 1]]), "follow");
+  s.startFollow(0);
+  s.advanceFollow(8);                  // 第一音符停在 0
+  assert.equal(s.followNow, 0);
+  s.advanceFollow(15);                 // 等了 7 秒 —— 时间轴纹丝不动
+  assert.equal(s.followNow, 0);
+  s.tick(s.followNow);                 // 等待中的音符永不过期
+  assert.equal(s.stats.miss, 0);
+  s.press(72, s.followNow);            // 命中
+  s.advanceFollow(15.5);               // 命中后 0.5 秒：下一音符（1s 处）应只走到一半
+  assert.equal(s.followNow, 0.5);
+  s.advanceFollow(16.0);
+  assert.equal(s.followNow, 1.0);      // 恰好停靠，而不是跳到真实时间 16s
 });
 
 test("跟练：等价指法（结果音高相同）判通过", () => {
   // 高do C6：逗号 与 右+z 都产生音高 84
   const s = new PracticeSession(mkSong([[84, 0, 1]]), "follow");
+  s.startFollow(0);
   assert.equal(s.press(84, -1).result, "hit"); // 主逻辑只比音高
 });
 
 test("跟练：超域音符到点自动跳过（免判定）", () => {
   const s = new PracticeSession(mkSong([[72, 0, 1], [110, 1, 1], [74, 2, 1]]), "follow");
-  // 110 超域 → outOfRange；fitOctave 不会移（72/74 已是主域）…若移位则此测试调整
   const over = s.rt.find(n => n.outOfRange);
   assert.ok(over, "110 应为超域");
-  s.press(72, 0);
+  s.startFollow(0);
+  s.advanceFollow(100);
+  s.press(72, s.followNow);            // 命中第一音
   assert.equal(s.nextNote().pitch, 74); // 超域音符不是 nextNote
-  s.tick(5);                            // 钳制外的真实时间扫过它
+  s.advanceFollow(102);                // 时间轴走向下一音符（2s 处）
+  s.tick(s.followNow);                 // 途中扫过超域音符（1.3s 已过期）→ auto
   assert.equal(over.judged, true);
   assert.equal(over.result, "auto");
-  assert.equal(s.stats.miss, 0);        // 跟练不计 miss
+  assert.equal(s.stats.miss, 0);       // 跟练不计 miss
 });
 
 // ---------- 节奏模式 ----------

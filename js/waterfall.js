@@ -53,6 +53,7 @@ export class Waterfall {
     this._drawColumnHeads(colW);
     if (session) this._drawNotes(now, session, st, colW, hitY);
     this._drawHitLine(hitY, session, st, colW);
+    this._drawNextHint(session, st.started, hitY);
     if (session && now < 0) this._drawCountdown(now);
     if (!st.started) this._drawCenterHint("按 空格 或点击「▶ 开始」");
     else if (!st.playing) this._drawCenterHint("已暂停 · 空格继续");
@@ -128,23 +129,39 @@ export class Waterfall {
         this._roundRect(x - 3, top - 3, w + 6, h + 6, 8);
         ctx.stroke();
       }
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = Math.max(alpha, 0.4); // 文字随块透明度，但保底可读
 
-      // 唱名 + 音名
+      // 唱名 + 修饰键文字 + 音名
+      const mods = [];
+      if (!n.outOfRange && n.combo){
+        if (n.combo.shift === -1) mods.push(["左键", "#ffd9a8"]);
+        else if (n.combo.shift === 1) mods.push(["右键", "#a8d4f2"]);
+        if (n.combo.sharp) mods.push(["中键", "#dcb7ef"]);
+      }
+      const cx = x + w / 2;
       ctx.fillStyle = n.outOfRange ? "#c7ccd4" : "#fff";
       if (h >= 22){
         ctx.font = "700 12.5px system-ui, 'Microsoft YaHei UI'";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(label, x + w / 2, top + Math.min(h / 2, 14));
+        ctx.fillText(label, cx, h < 34 ? top + h / 2 : top + 13);
       }
-      if (h >= 42){
-        ctx.font = "10px Consolas, monospace";
-        ctx.fillStyle = "rgba(255,255,255,0.6)";
-        ctx.fillText(sub, x + w / 2, top + 30);
+      if (!n.outOfRange && h >= 44){
+        if (mods.length){
+          this._drawModLine(mods, cx, top + 29);
+          if (h >= 60){
+            ctx.font = "9.5px Consolas, monospace";
+            ctx.fillStyle = "rgba(255,255,255,0.55)";
+            ctx.fillText(sub, cx, top + h - 10);
+          }
+        } else {
+          ctx.font = "10px Consolas, monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.6)";
+          ctx.fillText(sub, cx, top + 29);
+        }
       }
 
-      // 中键徽标（#音）
-      if (n.combo && n.combo.sharp && !n.outOfRange && h >= 22){
+      // 中键徽标：仅在放不下修饰键文字的短块上作为 # 提示
+      if (n.combo && n.combo.sharp && !n.outOfRange && h >= 22 && h < 44){
         ctx.beginPath();
         ctx.arc(x + w - 9, top + 9, 6.5, 0, Math.PI * 2);
         ctx.fillStyle = "#9b59b6";
@@ -154,6 +171,63 @@ export class Waterfall {
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText("♯", x + w - 9, top + 9.5);
       }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 块内修饰键文字行（各修饰键独立着色）
+  _drawModLine(mods, cx, y){
+    const ctx = this.ctx;
+    ctx.font = "10px system-ui, 'Microsoft YaHei UI'";
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    const segs = [];
+    mods.forEach((m, i) => {
+      if (i) segs.push(["＋", "rgba(255,255,255,0.5)"]);
+      segs.push(m);
+    });
+    const total = segs.reduce((s, [t]) => s + ctx.measureText(t).width, 0);
+    let px = cx - total / 2;
+    for (const [t, c] of segs){
+      ctx.fillStyle = c;
+      ctx.fillText(t, px, y);
+      px += ctx.measureText(t).width;
+    }
+  }
+
+  // 判定线上方的「下一音」独立文字行
+  _drawNextHint(session, started, hitY){
+    if (!started || !session) return;
+    const n = session.nextNote();
+    if (!n || !n.combo) return;
+    const ctx = this.ctx;
+    const parts = [["下一音", "rgba(255,255,255,0.72)"]];
+    if (n.combo.shift === -1) parts.push(["左键", "#ffd9a8"]);
+    else if (n.combo.shift === 1) parts.push(["右键", "#a8d4f2"]);
+    if (n.combo.sharp) parts.push(["中键", "#dcb7ef"]);
+    const keyName = n.combo.key === "," ? "，" : n.combo.key.toUpperCase();
+    parts.push(["键[" + keyName + "]", "rgba(255,255,255,0.92)"]);
+
+    ctx.font = "600 13px system-ui, 'Microsoft YaHei UI'";
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    const segs = [];
+    parts.forEach((p, i) => {
+      if (i) segs.push(["＋", "rgba(255,255,255,0.45)"]);
+      segs.push(p);
+    });
+    const total = segs.reduce((s, [t]) => s + ctx.measureText(t).width, 0);
+    const pad = 14, chipH = 26, y = hitY - 38;
+    ctx.globalAlpha = 0.92;
+    this._roundRect(this.W / 2 - total / 2 - pad, y, total + pad * 2, chipH, 13);
+    ctx.fillStyle = "rgba(12,14,19,0.66)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    let px = this.W / 2 - total / 2;
+    for (const [t, c] of segs){
+      ctx.fillStyle = c;
+      ctx.fillText(t, px, y + chipH / 2 + 0.5);
+      px += ctx.measureText(t).width;
     }
     ctx.globalAlpha = 1;
   }
