@@ -5,6 +5,6 @@
   "type": "module",
   "description": "口琴练习器（三角洲行动键位）—— 纯前端、GitHub Pages 静态部署",
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test \"tests/*.test.mjs\""
   }
 }
