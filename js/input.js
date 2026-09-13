@@ -1,5 +1,5 @@
 // 输入控制器 —— 键盘 + 鼠标修饰键捕获，行为与原《口琴钢琴测试台.html》一致：
-// 单音（后按优先）、松修饰键切音重触发、blur 全部释放、contextmenu/中键滚动抑制。
+// 单音（后按优先）、修饰键改变音高才切音重触发、blur 全部释放、contextmenu/中键滚动抑制。
 // 与原版不同处：给 UI 控件（[data-ui]）上的鼠标按下豁免修饰键处理；
 // 并把每次状态变化以事件形式上报（onEvent），供「正在吹」显示与练习判定使用。
 
@@ -19,6 +19,7 @@ export class InputController {
     this.mouseShift = 0;     // -1 左键 / 0 / +1 右键
     this.mouseSharp = false; // 中键
     this.latch = { shift: 0, sharp: false }; // 触屏/点击修饰灯的锁定状态
+    this.soundingPitch = null; // 当前发声的音高，null = 静音
 
     this._bind();
   }
@@ -51,37 +52,49 @@ export class InputController {
     this.updateMods();
   }
 
+  // 按下永远重触发：即使音高没变，玩家这一下也是一次主动起音
   pressKey(key){
     this.audio.ensure();
     if (!this.held.includes(key)) this.held.push(key);
     const p = this.currentPitch();
     this.audio.noteOn(p);
+    this.soundingPitch = p;
     this._emit("keyonset", key, p);
   }
 
   releaseKey(key){
     const i = this.held.indexOf(key);
     if (i >= 0) this.held.splice(i, 1);
-    const p = this.currentPitch();
-    if (!this.held.length) this.audio.noteOff(0.08);
-    else this.audio.noteOn(p);
+    const p = this._syncVoice();
     this._emit("keyoff", this.activeKey(), p);
   }
 
-  // 修饰键变化：若仍有按住键则切音重触发（与原版一致），但不作为新的判定 onset
+  // 修饰键变化：切音重触发，但不作为新的判定 onset
   updateMods(){
+    const p = this._syncVoice();
+    this._emit("mods", this.activeKey(), p);
+  }
+
+  // 让发声跟上按键状态。音高没变就不动当前声部，否则叠按时松开旧键会把还按着的音重播一遍。
+  _syncVoice(){
     const p = this.currentPitch();
-    if (this.held.length){
+    if (p === this.soundingPitch) return p;
+    if (p === null) this.audio.noteOff(0.08);
+    else {
       this.audio.ensure();
       this.audio.noteOn(p);
     }
-    this._emit("mods", this.activeKey(), p);
+    this.soundingPitch = p;
+    return p;
   }
 
   releaseAll(alsoVoice){
     this.held = [];
     this.mouseShift = 0; this.mouseSharp = false;
-    if (alsoVoice) this.audio.noteOff(0.08);
+    if (alsoVoice){
+      this.audio.noteOff(0.08);
+      this.soundingPitch = null;
+    }
     this._emit("releaseall", null, null);
   }
 
