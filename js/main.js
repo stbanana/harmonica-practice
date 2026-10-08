@@ -6,10 +6,9 @@ import { Waterfall } from "./waterfall.js";
 import { PracticeSession } from "./session.js";
 import { SheetView } from "./sheetview.js";
 import { parseMidi, buildSongFromMidi, summarizeChannels } from "./midi.js";
-import { DEMO_SONGS } from "../data/songs.js";
 import {
   PHYS_KEYS, KEY_DEG, NAME12, DEG,
-  pitchName, degName, regOf, buildSong,
+  pitchName, degName, regOf,
 } from "./music.js";
 
 const $ = id => document.getElementById(id);
@@ -194,16 +193,34 @@ function shakeKey(key){
 }
 
 // ---------- 曲目 ----------
-function initSongs(){
-  state.rawSongs = DEMO_SONGS.map(d => ({
-    id: d.id, title: d.title,
-    build(baseOct){
-      return buildSong({
-        title: d.title, source: "demo", bpm: d.bpm,
-        notes: d.notes.map(([pitch, startBeat, durBeats]) => ({ pitch, startBeat, durBeats })),
-      }, baseOct);
-    },
-  }));
+const BUILTIN_SONGS = [
+  { id: "see-you-again", title: "See You Again", file: "See You Again.mid" },
+  { id: "yilu-xiangbei", title: "一路向北",      file: "一路向北.mid" },
+  { id: "chun-riying", title: "春日影",      file: "春日影.mid" },
+];
+
+// 统一入口：内置曲目与导入的 MIDI 走同一构造与解析路径
+function makeMidiEntry({ id, title, parsed }){
+  return {
+    id, title, parsed, channelSel: undefined,
+    build(baseOct){ return buildSongFromMidi(this.parsed, this.channelSel, baseOct, this.title); },
+  };
+}
+
+// 启动时拉取并解析内置 MIDI；单个失败跳过并提示、不抛出（幂等：重试时不重复添加）
+async function initSongs(){
+  for (const s of BUILTIN_SONGS){
+    if (state.rawSongs.some(e => e.id === s.id)) continue;
+    try {
+      const res = await fetch(encodeURI("audio/songs/" + s.file));
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const parsed = parseMidi(await res.arrayBuffer());
+      if (!parsed.tracks.length) throw new Error("没有可用音符");
+      state.rawSongs.push(makeMidiEntry({ id: s.id, title: s.title, parsed }));
+    } catch (err) {
+      toast(`内置曲目「${s.title}」加载失败：${err.message}`);
+    }
+  }
   rebuildSongSel();
 }
 
@@ -362,12 +379,11 @@ async function importMidiFile(file){
     const buf = await file.arrayBuffer();
     const parsed = parseMidi(buf);
     if (!parsed.tracks.length) throw new Error("文件里没有可用音符");
-    const entry = {
+    const entry = makeMidiEntry({
       id: "midi-" + Date.now(),
       title: file.name.replace(/\.(mid|midi)$/i, "") || "MIDI 曲目",
-      parsed, channelSel: undefined,
-      build(baseOct){ return buildSongFromMidi(this.parsed, this.channelSel, baseOct, this.title); },
-    };
+      parsed,
+    });
     state.rawSongs.push(entry);
     rebuildSongSel();
     loadSong(state.rawSongs.length - 1);
@@ -380,29 +396,19 @@ async function importMidiFile(file){
 function rebuildChannelSel(entry){
   const sel = els.channelSel;
   sel.innerHTML = "";
-  if (entry.parsed){
-    const auto = document.createElement("option");
-    auto.value = "auto"; auto.textContent = "自动选择";
-    sel.appendChild(auto);
-    for (const c of summarizeChannels(entry.parsed)){
-      const op = document.createElement("option");
-      op.value = c.channel;
-      op.textContent = `通道 ${c.channel}（${c.noteCount} 音）`;
-      sel.appendChild(op);
-    }
-    const merge = document.createElement("option");
-    merge.value = "merge"; merge.textContent = "合并全部通道";
-    sel.appendChild(merge);
-    sel.value = entry.channelSel === undefined ? "auto" : String(entry.channelSel);
-  } else {
-    // 内置曲目：单通道
+  const auto = document.createElement("option");
+  auto.value = "auto"; auto.textContent = "自动选择";
+  sel.appendChild(auto);
+  for (const c of summarizeChannels(entry.parsed)){
     const op = document.createElement("option");
-    op.value = "1";
-    op.textContent = "通道 1";
-    op.disabled = true;
+    op.value = c.channel;
+    op.textContent = `通道 ${c.channel}（${c.noteCount} 音）`;
     sel.appendChild(op);
-    sel.value = "1";
   }
+  const merge = document.createElement("option");
+  merge.value = "merge"; merge.textContent = "合并全部通道";
+  sel.appendChild(merge);
+  sel.value = entry.channelSel === undefined ? "auto" : String(entry.channelSel);
 }
 
 // ---------- 简谱模式 ----------
@@ -617,11 +623,12 @@ function onLoadProgress(done, total){
   els.gateBar.style.width = (total ? done / total * 100 : 0) + "%";
   els.gateText.textContent = `${done} / ${total}`;
 }
-function bootAudio(isRetry){
-  const p = isRetry ? audio.retry() : audio.init(onLoadProgress);
-  p.then(({ failed }) => {
-    els.gate.classList.add("hidden");
+function boot(isRetry){
+  const audioP = isRetry ? audio.retry() : audio.init(onLoadProgress);
+  Promise.all([audioP, initSongs()]).then(([{ failed }]) => {
     if (failed.length) toast(`有 ${failed.length} 个音源加载失败，对应音高将无声`);
+    els.gate.classList.add("hidden");
+    if (state.mode === "waterfall") loadSong(state.currentIdx);
   }).catch(err => {
     els.gate.classList.add("error");
     els.gateTitle.textContent = "音源加载失败";
@@ -633,18 +640,16 @@ els.gateRetry.addEventListener("click", () => {
   els.gate.classList.remove("error");
   els.gateTitle.textContent = "音源加载中…";
   els.gateRetry.hidden = true;
-  bootAudio(true);
+  boot(true);
 });
 
 // ---------- 启动 ----------
 applyTheme(state.themeMode);
-initSongs();
 buildVirtualKeys();
 rebuildStrip();
 sheetView.restoreFromCache();
 els.tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === state.mode));
 document.body.dataset.mode = state.mode;
 els.hud.hidden = state.mode !== "waterfall";
-if (state.mode === "waterfall") loadSong(state.currentIdx);
 refreshNowDisplay(input.snapshot());
-bootAudio(false);
+boot(false);
