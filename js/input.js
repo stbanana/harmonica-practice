@@ -20,6 +20,7 @@ export class InputController {
     this.mouseSharp = false; // 中键
     this.latch = { shift: 0, sharp: false }; // 触屏/点击修饰灯的锁定状态
     this.soundingPitch = null; // 当前发声的音高，null = 静音
+    this.enabled = true;       // 试听时置 false：完全屏蔽按键（不发声、不判定）
 
     this._bind();
   }
@@ -45,13 +46,28 @@ export class InputController {
   }
 
   setLatch(part, value){
+    if (!this.enabled) return;
     if (part === "shift") this.latch.shift = value;
     else if (part === "sharp") this.latch.sharp = !!value;
     this.updateMods();
   }
 
+  // 屏蔽/恢复输入（试听时屏蔽）。屏蔽时清空按键与修饰状态并静音。
+  setEnabled(v){
+    this.enabled = !!v;
+    if (!this.enabled){
+      this.held = [];
+      this.mouseShift = 0; this.mouseSharp = false;
+      this.latch = { shift: 0, sharp: false };
+      this.audio.noteOff(0.05);
+      this.soundingPitch = null;
+    }
+    this._emit("reset", null, null);
+  }
+
   // 按下永远重触发：即使音高没变，玩家这一下也是一次主动起音
   pressKey(key){
+    if (!this.enabled) return;
     this.audio.ensure();
     if (!this.held.includes(key)) this.held.push(key);
     const p = this.currentPitch();
@@ -61,6 +77,7 @@ export class InputController {
   }
 
   releaseKey(key){
+    if (!this.enabled) return;
     const i = this.held.indexOf(key);
     if (i >= 0) this.held.splice(i, 1);
     const p = this._syncVoice();
@@ -69,6 +86,7 @@ export class InputController {
 
   // 修饰键变化：切音重触发，但不作为新的判定 onset
   updateMods(){
+    if (!this.enabled) return;
     const p = this._syncVoice();
     this._emit("mods", this.activeKey(), p);
   }

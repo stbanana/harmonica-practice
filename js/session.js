@@ -14,7 +14,7 @@ export class PracticeSession {
   reset(){
     // rt = 运行时音符状态（judged/result/judgedAt 不写回 song，重练可重来）
     this.rt = this.song.notes.map(n => ({ ...n, judged: false, result: null, judgedAt: null, deltaMs: null }));
-    this.stats = { perfect: 0, good: 0, miss: 0, wrong: 0, extra: 0, combo: 0, maxCombo: 0 };
+    this.stats = { perfect: 0, good: 0, miss: 0, wrong: 0, extra: 0, combo: 0, maxCombo: 0, skipped: 0 };
     this.finished = false;
     this.followNow = 0;
     this._lastWall = null;
@@ -116,13 +116,30 @@ export class PracticeSession {
     if (!this.finished && this.rt.every(n => n.judged)) this.finished = true;
   }
 
+  // 试听退出时调用：把 time 之前尚未判定的音符标为「跳过」。
+  // 这样 nextNote() 落到当前位置之后（跟练不会因钳制回跳），节奏模式下一帧 tick
+  // 也不会把它们批量判成 miss；跳过的音符不计入准确率分母。
+  skipBefore(time){
+    for (const n of this.rt){
+      if (n.judged || n.startSec >= time) continue;
+      if (n.outOfRange){
+        n.judged = true; n.result = "auto"; // 超域音本就免判定，结清但不计入跳过
+      } else {
+        n.judged = true; n.result = "skip";
+        this.stats.skipped++;
+      }
+    }
+    if (this.mode === "rhythm") this.stats.combo = 0;
+    this._checkFinished(time);
+  }
+
   progress(){
     const total = this.rt.length || 1;
     return Math.round(this.rt.filter(n => n.judged).length / total * 100);
   }
 
   accuracy(){
-    const denom = this.song.judgeableCount;
+    const denom = this.song.judgeableCount - this.stats.skipped;
     if (!denom) return null;
     return (this.stats.perfect + 0.6 * this.stats.good) / denom;
   }

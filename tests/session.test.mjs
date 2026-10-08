@@ -132,5 +132,46 @@ test("重练 reset 恢复初始状态", () => {
   s.reset();
   assert.equal(s.finished, false);
   assert.equal(s.rt[0].judged, false);
-  assert.deepEqual(s.stats, { perfect: 0, good: 0, miss: 0, wrong: 0, extra: 0, combo: 0, maxCombo: 0 });
+  assert.deepEqual(s.stats, { perfect: 0, good: 0, miss: 0, wrong: 0, extra: 0, combo: 0, maxCombo: 0, skipped: 0 });
+});
+
+// ---------- skipBefore（试听退出：略过已播过的音符） ----------
+
+test("skipBefore：t 之前的未判定音符记为跳过，不计入下一音与准确率分母", () => {
+  const s = new PracticeSession(mkSong([[72, 0, 1], [74, 1, 1], [76, 2, 1], [77, 3, 1]]), "rhythm");
+  s.press(72, 0);          // 第 1 音 perfect
+  s.skipBefore(2.5);       // 跳过 74(1s)、76(2s)
+  assert.equal(s.stats.skipped, 2);
+  assert.equal(s.stats.perfect, 1);
+  assert.equal(s.nextNote().pitch, 77);
+  assert.equal(s.accuracy(), 1 / 2); // 分母 = judgeableCount(4) - skipped(2)
+  assert.equal(s.finished, false);
+  s.press(77, 3);
+  assert.equal(s.finished, true);
+});
+
+test("skipBefore：已判定音符不受影响；t 之后的音符不被跳过", () => {
+  const s = new PracticeSession(mkSong([[72, 0, 1], [74, 2, 1]]), "rhythm");
+  s.skipBefore(1.5);       // 仅 72@0 在 1.5 之前
+  assert.equal(s.stats.skipped, 1);
+  assert.equal(s.rt[0].result, "skip");
+  assert.equal(s.rt[1].judged, false);
+  assert.equal(s.nextNote().pitch, 74);
+});
+
+test("skipBefore：t 之前的超域音符结清为 auto，不计入跳过与分母", () => {
+  const song = buildSong({
+    title: "x", source: "midi", bpm: 60,
+    notes: [
+      { pitch: 72, startSec: 0, durSec: 0.5 },
+      { pitch: 130, startSec: 0.5, durSec: 0.5 }, // 超域
+      { pitch: 74, startSec: 1, durSec: 0.5 },
+    ],
+  }, 5);
+  const s = new PracticeSession(song, "rhythm");
+  assert.equal(song.judgeableCount, 2);
+  s.skipBefore(0.9);
+  assert.equal(s.stats.skipped, 1);                        // 只算可判定的 72
+  assert.equal(s.rt.find(n => n.outOfRange).result, "auto");
+  assert.equal(s.accuracy(), 0 / 1);                       // 分母 = 2 - 1
 });

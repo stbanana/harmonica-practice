@@ -31,6 +31,8 @@ const state = {
   session: null,
   started: false,
   overlayShown: false,
+  auditioning: false,   // 试听（自动演奏）状态
+  auditionNote: null,   // 试听中当前正在发声的音符对象（用于判断是否需要重新起音）
 };
 
 // ---------- 时钟（速度倍率作用于歌曲时间；判定在歌曲时间轴上进行） ----------
@@ -65,6 +67,11 @@ const clock = {
     this.prevA = a; this.prevN = n;
     return n;
   },
+  // 重定基：让 songNow() 等于 t（切换时间线来源时用，保持进度不跳变）
+  setSongTime(t){
+    this.base = audio.now() - (t + this.leadIn) / this.speed;
+    this.prevA = null; this.prevN = t; this.pausedAt = t;
+  },
 };
 
 // ---------- DOM ----------
@@ -75,7 +82,7 @@ const els = {
   themeBtn: $("themeBtn"), panicBtn: $("panicBtn"),
   songSel: $("songSel"), importMidiBtn: $("importMidiBtn"), midiFile: $("midiFile"),
   channelWrap: $("channelWrap"), channelSel: $("channelSel"),
-  speedSel: $("speedSel"), playBtn: $("playBtn"), resetBtn: $("resetBtn"),
+  speedSel: $("speedSel"), playBtn: $("playBtn"), resetBtn: $("resetBtn"), auditionBtn: $("auditionBtn"),
   hud: $("hud"), hudProgressBar: $("hudProgressBar"), hudProgress: $("hudProgress"),
   hudCombo: $("hudCombo"), hudAcc: $("hudAcc"), hudScore: $("hudScore"),
   freeStage: $("freeStage"), nowNameBig: $("nowNameBig"), nowComboBig: $("nowComboBig"),
@@ -128,7 +135,7 @@ const input = new InputController({ audio, baseOct: state.baseOct, onEvent: hand
 
 function handleInput(e){
   refreshNowDisplay(e.snapshot);
-  if (e.type === "keyonset" && state.mode === "waterfall" && clock.playing && state.session){
+  if (e.type === "keyonset" && state.mode === "waterfall" && clock.playing && state.session && !state.auditioning){
     judgePress(e);
   }
 }
@@ -254,6 +261,7 @@ function resetSession(){
   state.overlayShown = false;
   hideOverlay();
   clearTargetHighlight();
+  clearAudition();
   updatePlayBtn();
   lastHudKey = "";
 }
@@ -271,6 +279,7 @@ function restartSession(){
 // ---------- 播放控制 ----------
 function togglePlay(){
   if (!state.session || !state.song) return;
+  if (state.auditioning){ stopAudition(true); return; } // 行为3：点「开始」退出试听并继续练习
   if (!state.started){
     state.started = true;
     audio.ensure();
@@ -288,8 +297,119 @@ function togglePlay(){
   updatePlayBtn();
 }
 
+// 空格键 = 「开始/暂停」传输控制，与播放按钮一致（含试听态：退出试听进入练习）
 function updatePlayBtn(){
-  els.playBtn.textContent = !state.started ? "▶ 开始" : (clock.playing ? "⏸ 暂停" : "▶ 继续");
+  els.playBtn.textContent = state.auditioning
+    ? "▶ 开始练习"
+    : (!state.started ? "▶ 开始" : (clock.playing ? "⏸ 暂停" : "▶ 继续"));
+}
+
+function updateAuditionBtn(){
+  els.auditionBtn.classList.toggle("active", state.auditioning);
+  els.auditionBtn.textContent = state.auditioning ? "试听中" : "试听";
+}
+
+// ---------- 试听（自动演奏） ----------
+// 当前歌曲时间：练习+跟练走事件驱动时间轴，其余（含试听）走连续时钟
+function songTime(){
+  return (state.sub === "follow" && !state.auditioning)
+    ? state.session.followNow
+    : clock.songNow();
+}
+
+// 最后一个 startSec <= now 且尚未结束的音符（单声部当前应发声音）
+function currentAuditionNote(now){
+  if (!state.session) return null;
+  let last = null;
+  for (const n of state.session.rt){
+    if (n.startSec > now) break;
+    last = n;
+  }
+  return (last && now < last.startSec + last.durSec) ? last : null;
+}
+
+function updateAuditionAudio(now){
+  const n = currentAuditionNote(now);
+  if (n === state.auditionNote) return; // 仍是同一音符（含 null）→ 不动
+  state.auditionNote = n;
+  const p = (n && audio.has(n.pitch)) ? n.pitch : null; // 无采样的音视为静音
+  if (p === null) audio.noteOff(0.06);
+  else audio.noteOn(p); // 即使音高与上一音相同也重新起音，还原「连续按下」的听感
+}
+
+function startAudition(){
+  if (!state.session || !state.song || state.auditioning) return;
+  audio.ensure();
+  let t;
+  if (!state.started || state.session.finished){
+    // 未开始（或已结束）：从头，含预备倒数
+    state.session.reset();
+    state.session.startFollow(-clock.leadIn);
+    state.overlayShown = false;
+    hideOverlay();
+    t = -clock.leadIn;
+  } else {
+    t = songTime(); // 行为2：沿用当前进度，不从头
+  }
+  state.started = true;
+  state.auditioning = true;
+  state.auditionNote = null;
+  input.setEnabled(false);
+  document.body.classList.add("auditioning");
+  clock.setSongTime(t);
+  clock.playing = true;
+  clearTargetHighlight();
+  updatePlayBtn(); updateAuditionBtn();
+}
+
+// 退出试听回到练习：resume=true 继续播放（点「开始」），false 暂停等待（再点「试听」）
+function stopAudition(resume){
+  if (!state.auditioning) return;
+  const t = clock.songNow();
+  state.auditioning = false;
+  state.auditionNote = null;
+  audio.noteOff(0.05);
+  input.setEnabled(true);
+  document.body.classList.remove("auditioning");
+  state.session.skipBefore(t); // 试听略过的音符记为「跳过」，不计入准确率
+  state.started = true;
+  updateAuditionBtn();
+  if (state.session.finished){ // 已播到结尾：直接从头重练
+    restartSession();
+    return;
+  }
+  if (state.sub === "follow"){
+    state.session.followNow = t;
+    state.session.syncFollowWall();
+  }
+  clock.setSongTime(t);
+  clock.playing = !!resume;
+  clearTargetHighlight();
+  updatePlayBtn();
+}
+
+// 无条件清理试听态（重置会话、离开瀑布流模式时用）
+function clearAudition(){
+  if (state.auditioning){
+    state.auditioning = false;
+    state.auditionNote = null;
+    audio.noteOff(0.05);
+  }
+  if (!input.enabled) input.setEnabled(true);
+  document.body.classList.remove("auditioning");
+  updateAuditionBtn();
+}
+
+// 试听播放到曲终：退出试听并回到初始态（按键恢复、按钮复位，可再次开始或试听）
+function endAudition(){
+  clock.stop();
+  state.auditionNote = null;
+  state.auditioning = false;
+  audio.noteOff(0.05);
+  if (!input.enabled) input.setEnabled(true);
+  document.body.classList.remove("auditioning");
+  resetSession(); // 重置会话 + 清高亮 + 刷新按钮（含 updateAuditionBtn）
+  toast("试听结束");
 }
 
 // ---------- HUD ----------
@@ -309,9 +429,12 @@ function updateHUD(){
 }
 
 let lastTargetCol = -1, lastTargetLamps = "";
-function updateTargetHighlight(){
-  // 仅在会话已开始时高亮「下一音」的键，与画布上的「下一音」文字条保持一致
-  const n = state.started && state.session ? state.session.nextNote() : null;
+function updateTargetHighlight(now){
+  // 仅在会话已开始时高亮：练习时高亮「下一音」，试听时高亮「正在吹」的音
+  let n = null;
+  if (state.started && state.session){
+    n = state.auditioning ? currentAuditionNote(now) : state.session.nextNote();
+  }
   const col = n ? n.col : -1;
   const lampKey = n && n.combo ? `${n.combo.shift}|${n.combo.sharp}` : "";
   if (col === lastTargetCol && lampKey === lastTargetLamps) return;
@@ -363,6 +486,7 @@ function showEndOverlay(){
     add("最大连击", st.maxCombo);
     add("评分", s.score());
   }
+  if (st.skipped) add("跳过", st.skipped);
   els.endStats.innerHTML = rows.join("");
   els.endTitle.textContent = state.sub === "follow" ? "练习完成！" : "演奏完成！";
   els.endOverlay.classList.remove("hidden");
@@ -431,6 +555,7 @@ function setMode(mode){
     clock.stop();
     state.started = false;
     clearTargetHighlight();
+    clearAudition();
     updatePlayBtn();
   } else {
     if (!state.song) loadSong(state.currentIdx);
@@ -444,15 +569,19 @@ function frame(){
   requestAnimationFrame(frame);
   const animT = performance.now() / 1000;
   if (state.mode === "waterfall" && state.session){
-    if (clock.playing && state.sub === "follow"){
+    if (clock.playing && state.sub === "follow" && !state.auditioning){
       state.session.advanceFollow(animT, clock.speed);
     }
-    const renderNow = state.sub === "follow" ? state.session.followNow : clock.songNow();
-    if (clock.playing) state.session.tick(renderNow);
-    waterfall.render(renderNow, state.session, { animT, playing: clock.playing, started: state.started });
+    const now = songTime();
+    if (clock.playing && !state.auditioning) state.session.tick(now);
+    if (clock.playing && state.auditioning){
+      updateAuditionAudio(now);
+      if (now > state.song.durationSec + 0.5) endAudition();
+    }
+    waterfall.render(now, state.session, { animT, playing: clock.playing, started: state.started, auditioning: state.auditioning });
     updateHUD();
-    updateTargetHighlight();
-    checkFinish(renderNow);
+    updateTargetHighlight(now);
+    if (!state.auditioning) checkFinish(now);
   }
 }
 requestAnimationFrame(frame);
@@ -580,6 +709,10 @@ els.speedSel.addEventListener("change", e => {
 if (settings.speed !== undefined) els.speedSel.value = String(settings.speed);
 
 els.playBtn.addEventListener("click", togglePlay);
+els.auditionBtn.addEventListener("click", () => {
+  if (state.auditioning) stopAudition(false); // 开关：再点退出试听，回到练习（暂停等待）
+  else startAudition();
+});
 els.resetBtn.addEventListener("click", () => { if (state.session) resetSession(); });
 
 els.endRestartBtn.addEventListener("click", restartSession);
@@ -614,6 +747,8 @@ document.addEventListener("keydown", e => {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && clock.playing){
     clock.pause();
+    audio.noteOff(0.05);
+    state.auditionNote = null;
     updatePlayBtn();
   }
 });
@@ -651,5 +786,6 @@ sheetView.restoreFromCache();
 els.tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === state.mode));
 document.body.dataset.mode = state.mode;
 els.hud.hidden = state.mode !== "waterfall";
+updateAuditionBtn();
 refreshNowDisplay(input.snapshot());
 boot(false);

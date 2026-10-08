@@ -53,10 +53,10 @@ export class Waterfall {
     this._drawColumnHeads(colW);
     if (session) this._drawNotes(now, session, st, colW, hitY);
     this._drawHitLine(hitY, session, st, colW);
-    this._drawNextHint(session, st.started, hitY);
+    this._drawNextHint(session, st.started && !st.auditioning, hitY);
     if (session && now < 0) this._drawCountdown(now);
     if (!st.started) this._drawCenterHint("按 空格 或点击「▶ 开始」");
-    else if (!st.playing) this._drawCenterHint("已暂停 · 空格继续");
+    else if (!st.playing) this._drawCenterHint(st.auditioning ? "试听已暂停" : "已暂停 · 空格继续");
     this._drawFx(colW, hitY);
   }
 
@@ -102,7 +102,7 @@ export class Waterfall {
         if (n.result === "miss"){ fill = GRAY; alpha = 0.45; }
         else if (n.result === "auto"){ fill = GRAY; alpha = 0.18; }
         else alpha = Math.max(0.12, 0.92 - age / 0.6);
-      } else if (n === next && session.mode === "follow" && Math.abs(bottom - hitY) < 2.5){
+      } else if (n === next && session.mode === "follow" && !st.auditioning && Math.abs(bottom - hitY) < 2.5){
         alpha = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(st.animT * 6)); // 停靠脉动
       }
 
@@ -121,8 +121,8 @@ export class Waterfall {
         ctx.fill();
       }
 
-      // 停靠等待的外发光
-      if (n === next && session.mode === "follow" && !n.judged && Math.abs(bottom - hitY) < 2.5){
+      // 停靠等待的外发光（试听时不做停靠提示）
+      if (n === next && session.mode === "follow" && !st.auditioning && !n.judged && Math.abs(bottom - hitY) < 2.5){
         ctx.globalAlpha = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(st.animT * 6));
         ctx.lineWidth = 2.5;
         ctx.strokeStyle = fill;

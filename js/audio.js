@@ -47,6 +47,9 @@ class AudioEngine {
 
   isReady(){ return this._ready; }
 
+  // 该音高是否已有采样（试听时用于跳过无声的超域音）
+  has(p){ return this.buffers.has(p); }
+
   now(){
     return this.ctx ? this.ctx.currentTime : performance.now() / 1000;
   }

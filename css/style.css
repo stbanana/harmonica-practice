@@ -311,6 +311,12 @@ body[data-mode="sheet"] .panel-sheet { display: flex; }
 .gkey.target.shake { animation: shake .3s; }
 .gkey.shake { animation: shake .3s; }
 
+/* 试听中：按键行/修饰灯变暗表示不可交互 */
+body.auditioning .keys,
+body.auditioning .lamps { opacity: .45; }
+body.auditioning .gkey,
+body.auditioning .lamp { cursor: default; }
+
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   20% { transform: translateX(-5px); }
