@@ -24,8 +24,6 @@ export class InputController {
     this._bind();
   }
 
-  setBaseOct(o){ this.baseOct = o; }
-
   get shift(){ return this.mouseShift !== 0 ? this.mouseShift : this.latch.shift; }
   get sharp(){ return this.mouseSharp || this.latch.sharp; }
 

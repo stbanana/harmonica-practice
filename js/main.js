@@ -23,7 +23,7 @@ const settings = (() => {
 const state = {
   mode: ["free", "waterfall", "sheet"].includes(settings.lastMode) ? settings.lastMode : "free",
   sub: "rhythm",
-  baseOct: settings.baseOct ?? 5,
+  baseOct: 5,        // 固定「中音do = C5」，与采样音域（MIDI 59–97）对齐
   speed: settings.speed ?? 1,
   themeMode: ["auto", "dark", "light"].includes(settings.theme) ? settings.theme : "auto",
   rawSongs: [],      // {id, title, build(baseOct) → Song}
@@ -72,7 +72,7 @@ const clock = {
 const els = {
   tabs: [...document.querySelectorAll("#modeTabs .tab")],
   subBtns: [...document.querySelectorAll("#practiceSeg button")],
-  baseSel: $("baseSel"), volumeRange: $("volumeRange"), muteBtn: $("muteBtn"),
+  volumeRange: $("volumeRange"), muteBtn: $("muteBtn"),
   themeBtn: $("themeBtn"), panicBtn: $("panicBtn"),
   songSel: $("songSel"), importMidiBtn: $("importMidiBtn"), midiFile: $("midiFile"),
   channelWrap: $("channelWrap"), channelSel: $("channelSel"),
@@ -88,6 +88,8 @@ const els = {
   importSheetBtn: $("importSheetBtn"), sheetFile: $("sheetFile"), clearSheetBtn: $("clearSheetBtn"),
   zoomInBtn: $("zoomInBtn"), zoomOutBtn: $("zoomOutBtn"), fitBtn: $("fitBtn"), resetViewBtn: $("resetViewBtn"),
   nowName: $("nowName"), nowCombo: $("nowCombo"),
+  gate: $("gate"), gateBar: $("gateBar"), gateText: $("gateText"),
+  gateTitle: $("gateTitle"), gateRetry: $("gateRetry"),
   lampLeft: $("lampLeft"), lampRight: $("lampRight"), lampMid: $("lampMid"),
   virtualKeys: $("virtualKeys"),
   toast: $("toast"),
@@ -112,7 +114,6 @@ function saveSettings(){
   saveTimer = setTimeout(() => {
     try {
       localStorage.setItem("hp_settings", JSON.stringify({
-        baseOct: state.baseOct,
         volume: +els.volumeRange.value,
         muted: audio.muted,
         speed: clock.speed,
@@ -235,6 +236,7 @@ function resetSession(){
   state.started = false;
   state.overlayShown = false;
   hideOverlay();
+  clearTargetHighlight();
   updatePlayBtn();
   lastHudKey = "";
 }
@@ -291,7 +293,8 @@ function updateHUD(){
 
 let lastTargetCol = -1, lastTargetLamps = "";
 function updateTargetHighlight(){
-  const n = state.session && state.session.nextNote();
+  // 仅在会话已开始时高亮「下一音」的键，与画布上的「下一音」文字条保持一致
+  const n = state.started && state.session ? state.session.nextNote() : null;
   const col = n ? n.col : -1;
   const lampKey = n && n.combo ? `${n.combo.shift}|${n.combo.sharp}` : "";
   if (col === lastTargetCol && lampKey === lastTargetLamps) return;
@@ -301,6 +304,15 @@ function updateTargetHighlight(){
   els.lampLeft.classList.toggle("hint-left", !!(n && n.combo && n.combo.shift === -1));
   els.lampRight.classList.toggle("hint-right", !!(n && n.combo && n.combo.shift === 1));
   els.lampMid.classList.toggle("hint-mid", !!(n && n.combo && n.combo.sharp));
+}
+
+// 清空按键行/修饰灯上的高亮（退出瀑布流、重置会话时调用），避免高亮残留
+function clearTargetHighlight(){
+  lastTargetCol = -1; lastTargetLamps = "";
+  for (const [, el] of keyCells) el.classList.remove("target");
+  els.lampLeft.classList.remove("hint-left");
+  els.lampRight.classList.remove("hint-right");
+  els.lampMid.classList.remove("hint-mid");
 }
 
 // ---------- 结算 ----------
@@ -412,6 +424,7 @@ function setMode(mode){
   if (mode !== "waterfall"){
     clock.stop();
     state.started = false;
+    clearTargetHighlight();
     updatePlayBtn();
   } else {
     if (!state.song) loadSong(state.currentIdx);
@@ -506,20 +519,6 @@ els.subBtns.forEach(b => b.addEventListener("click", () => {
   if (state.mode === "waterfall" && state.song) resetSession();
 }));
 
-for (let o = 3; o <= 7; o++){
-  const op = document.createElement("option");
-  op.value = o; op.textContent = "C" + o;
-  if (o === state.baseOct) op.selected = true;
-  els.baseSel.appendChild(op);
-}
-els.baseSel.addEventListener("change", e => {
-  state.baseOct = parseInt(e.target.value, 10);
-  input.setBaseOct(state.baseOct);
-  rebuildStrip();
-  if (state.song) loadSong(state.currentIdx); // 音域/指法变了，重建曲目并重置会话
-  saveSettings();
-});
-
 els.volumeRange.addEventListener("input", e => {
   audio.setVolume(+e.target.value / 100);
   saveSettings();
@@ -613,6 +612,30 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+// ---------- 音源门控加载 ----------
+function onLoadProgress(done, total){
+  els.gateBar.style.width = (total ? done / total * 100 : 0) + "%";
+  els.gateText.textContent = `${done} / ${total}`;
+}
+function bootAudio(isRetry){
+  const p = isRetry ? audio.retry() : audio.init(onLoadProgress);
+  p.then(({ failed }) => {
+    els.gate.classList.add("hidden");
+    if (failed.length) toast(`有 ${failed.length} 个音源加载失败，对应音高将无声`);
+  }).catch(err => {
+    els.gate.classList.add("error");
+    els.gateTitle.textContent = "音源加载失败";
+    els.gateText.textContent = String((err && err.message) || err);
+    els.gateRetry.hidden = false;
+  });
+}
+els.gateRetry.addEventListener("click", () => {
+  els.gate.classList.remove("error");
+  els.gateTitle.textContent = "音源加载中…";
+  els.gateRetry.hidden = true;
+  bootAudio(true);
+});
+
 // ---------- 启动 ----------
 applyTheme(state.themeMode);
 initSongs();
@@ -624,3 +647,4 @@ document.body.dataset.mode = state.mode;
 els.hud.hidden = state.mode !== "waterfall";
 if (state.mode === "waterfall") loadSong(state.currentIdx);
 refreshNowDisplay(input.snapshot());
+bootAudio(false);

@@ -9,6 +9,15 @@
 </head>
 <body data-mode="free">
 
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <h2 id="gateTitle">音源加载中…</h2>
+    <div class="gate-bar"><i id="gateBar"></i></div>
+    <p class="gate-text" id="gateText">0 / 39</p>
+    <button class="btn primary" id="gateRetry" hidden>重试</button>
+  </div>
+</div>
+
 <header class="app-header">
   <h1 class="logo">口琴练习器</h1>
   <nav class="tabs" data-ui id="modeTabs">
@@ -17,9 +26,6 @@
     <button data-tab="sheet" class="tab">简谱看谱</button>
   </nav>
   <div class="header-settings" data-ui>
-    <label class="ctl" title="中音 do 的基准八度">中音 do
-      <select id="baseSel"></select>
-    </label>
     <label class="ctl" title="音量">音量
       <input type="range" id="volumeRange" min="0" max="100" value="80">
     </label>

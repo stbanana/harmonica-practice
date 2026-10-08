@@ -1,5 +1,23 @@
-// 合成音频引擎 —— 单音口琴音色（移植原三角波并加一层泛音 + 轻微颤音）。
-// AudioContext 在首次用户手势时创建（即使静音也要创建：节奏模式的时钟依赖它）。
+// 真实口琴采样引擎 —— 门控加载 39 个 .ogg（B3–C#7），按键播放对应采样。
+// 对外 API 与旧合成引擎一致：ensure / now / noteOn / noteOff / panic / setVolume / setMuted / muted。
+
+export const SAMPLE_MIN = 59;  // B3
+export const SAMPLE_MAX = 97;  // C#7
+const LETTER = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"];
+const CONCURRENCY = 6;
+const FADE_IN = 0.008;         // 8ms 淡入防爆音
+const SAMPLE_GAIN = 0.9;
+
+export function sampleUrl(p){
+  const pc = ((p % 12) + 12) % 12;
+  return `audio/harmonica/Harmonica_${LETTER[pc]}${Math.floor(p / 12) - 1}.ogg`;
+}
+
+export function samplePitches(){
+  const out = [];
+  for (let p = SAMPLE_MIN; p <= SAMPLE_MAX; p++) out.push(p);
+  return out;
+}
 
 class AudioEngine {
   constructor(){
@@ -8,6 +26,11 @@ class AudioEngine {
     this.voice = null;
     this.muted = false;
     this._volume = 0.8;
+    this.buffers = new Map(); // pitch → AudioBuffer
+    this._failed = [];
+    this._initPromise = null;
+    this._onProgress = null;
+    this._ready = false;
   }
 
   ensure(){
@@ -22,11 +45,11 @@ class AudioEngine {
     if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
   }
 
+  isReady(){ return this._ready; }
+
   now(){
     return this.ctx ? this.ctx.currentTime : performance.now() / 1000;
   }
-
-  freq(p){ return 440 * Math.pow(2, (p - 69) / 12); }
 
   setVolume(v){
     this._volume = v;
@@ -38,32 +61,66 @@ class AudioEngine {
     if (this.master) this.master.gain.value = m ? 0 : this._volume;
   }
 
+  // 门控加载：并发拉取并解码全部采样，边加载边回调 onProgress(done, total, failed)
+  init(onProgress){
+    if (onProgress) this._onProgress = onProgress;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = this._doInit();
+    return this._initPromise;
+  }
+
+  retry(){
+    this._initPromise = null;
+    this._failed = [];
+    return this.init();
+  }
+
+  async _doInit(){
+    this.ensure();
+    const total = samplePitches().length;
+    const report = () => { if (this._onProgress) this._onProgress(this.buffers.size, total, this._failed.length); };
+    report();
+    const pending = samplePitches().filter(p => !this.buffers.has(p));
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length){
+        const p = pending[next++];
+        await this._loadOne(p);
+        report();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(1, pending.length)) }, worker));
+    this._ready = true;
+    report();
+    return { failed: this._failed.slice() };
+  }
+
+  async _loadOne(p){
+    for (let attempt = 0; attempt < 2; attempt++){ // 失败重试一次
+      try {
+        const res = await fetch(sampleUrl(p));
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const buf = await res.arrayBuffer();
+        this.buffers.set(p, await this.ctx.decodeAudioData(buf));
+        return;
+      } catch (e) {
+        if (attempt === 1) this._failed.push(p);
+      }
+    }
+  }
+
   noteOn(p){
-    if (!this.ctx) return;
+    if (!this.ctx || !this.buffers.has(p)) return;
     this._releasePrev(0.02);
     const t = this.ctx.currentTime;
-    const f = this.freq(p);
-
-    const o1 = this.ctx.createOscillator(); o1.type = "triangle"; o1.frequency.value = f;
-    const o2 = this.ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = f * 2;
-    const g2 = this.ctx.createGain(); g2.gain.value = 0.15;
-    const env = this.ctx.createGain();
-    env.gain.setValueAtTime(0.0001, t);
-    env.gain.exponentialRampToValueAtTime(0.3, t + 0.008);
-
-    // 颤音：约 5 音分，120ms 后淡入
-    const lfo = this.ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 5.5;
-    const lfoGain = this.ctx.createGain();
-    lfoGain.gain.setValueAtTime(0, t);
-    lfoGain.gain.linearRampToValueAtTime(f * 0.0029, t + 0.15);
-    lfo.connect(lfoGain);
-    lfoGain.connect(o1.frequency);
-    lfoGain.connect(o2.frequency);
-
-    o2.connect(g2); g2.connect(env); o1.connect(env);
-    env.connect(this.master);
-    o1.start(t); o2.start(t); lfo.start(t);
-    this.voice = { o1, o2, lfo, env };
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.buffers.get(p);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(SAMPLE_GAIN, t + FADE_IN);
+    src.connect(g); g.connect(this.master);
+    src.start(t);
+    this.voice = { src, g };
   }
 
   noteOff(release = 0.08){
@@ -79,13 +136,11 @@ class AudioEngine {
     if (!v || !this.ctx) return;
     const t = this.ctx.currentTime;
     try {
-      v.env.gain.cancelScheduledValues(t);
-      v.env.gain.setValueAtTime(Math.max(v.env.gain.value, 0.0001), t);
-      v.env.gain.exponentialRampToValueAtTime(0.0001, t + release);
+      v.g.gain.cancelScheduledValues(t);
+      v.g.gain.setValueAtTime(Math.max(v.g.gain.value, 0.0001), t);
+      v.g.gain.exponentialRampToValueAtTime(0.0001, t + release);
     } catch (e) {}
-    try { v.o1.stop(t + release + 0.02); } catch (e) {}
-    try { v.o2.stop(t + release + 0.02); } catch (e) {}
-    try { v.lfo.stop(t + release + 0.02); } catch (e) {}
+    try { v.src.stop(t + release + 0.02); } catch (e) {}
     this.voice = null;
   }
 }
